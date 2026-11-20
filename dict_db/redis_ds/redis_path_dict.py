@@ -1,85 +1,109 @@
-__author__ = 'OrW'
+"""A dictionary of top-level Redis keys sharing a common path prefix."""
 
+from __future__ import annotations
 
-from redis_dict import RedisDict
-from redis_set import RedisSet
-import redis_config as redis_config
+import contextlib
+import fnmatch
+from collections.abc import Iterator
+from typing import Any
+
+from ..serialization import decode_text
+from .redis_dict import RedisDict
+from .redis_pipe import RedisPipe
+from .redis_set import RedisSet
+
+__author__ = "OrW"
 
 
 class RedisPathDict(RedisDict):
+    """Store each item as its own Redis key, ``PathDict|<path>|<key>``.
 
-    def __init__(self, path, redis_client=redis_config.CLIENT):
-        super(RedisPathDict, self).__init__(redis_client=redis_client)
+    The logical keys are tracked in the set ``meta_PathDict|<path>|keys`` so
+    ``len()``, iteration and :meth:`keys` do not need to scan the database.
+    Unlike a hash, every item can have its own Redis TTL (see :meth:`expire`).
+    """
+
+    def __init__(self, path: str, redis_client: Any = None) -> None:
+        super().__init__(redis_client=redis_client)
         self._path = path
-        self._keys = RedisSet(self._build_path("keys", prefix="meta_"), redis_client=redis_client)
+        self._keys = RedisSet(self._build_path("keys", prefix="meta_"), redis_client=self._client)
 
     @property
-    def path(self):
+    def path(self) -> str:
+        """The path (namespace) of this dictionary."""
         return self._path
 
-    def keys(self, pattern="*"):
-        """Keys for Redis dictionary."""
-        pattern = self._build_path(pattern)
-        return self._client.keys(pattern)
-
-    def delete_all(self):
-        for key in self._keys:
+    @contextlib.contextmanager
+    def _transaction(self) -> Iterator[Any]:
+        """Yield something to queue commands on, executed atomically on exit."""
+        if isinstance(self._client, RedisPipe):
             with self._client:
-                    self._client.delete(key)
-                    self._keys.delete_all()
+                yield self._client
+        else:
+            pipe = self._client.pipeline()
+            yield pipe
+            pipe.execute()
 
-    def __len__(self):
+    def keys(self, pattern: str = "*") -> list[Any]:  # type: ignore[override]
+        """Return the logical keys matching a glob ``pattern``."""
+        keys = list(self._keys)
+        if pattern == "*":
+            return keys
+        return [key for key in keys if fnmatch.fnmatchcase(str(key), pattern)]
+
+    def delete_all(self) -> None:
+        """Delete every item of this dictionary and its key index."""
+        paths = [self._build_path(key) for key in self._keys]
+        with self._transaction() as client:
+            if paths:
+                client.delete(*paths)
+            client.delete(self._keys.set_key)
+
+    def __len__(self) -> int:
         return len(self._keys)
 
-    def __iter__(self):
-        for key in self._keys:
-            yield key
+    def __iter__(self) -> Iterator[Any]:
+        return iter(self._keys)
 
-    iterkeys = __iter__
+    def _build_path(self, key: Any, prefix: str | None = None) -> str:
+        return f"{prefix or ''}PathDict|{self.path}|{decode_text(key)}"
 
-    def itervalues(self):
-        for key in self:
-            yield self[key]
+    def __getitem__(self, key: Any) -> Any:
+        """Return the value of ``key``; raise :class:`KeyError` if it is missing."""
+        try:
+            return super().__getitem__(self._build_path(key))
+        except KeyError:
+            raise KeyError(key) from None
 
-    def iteritems(self):
-        for key in self:
-            yield key, self[key]
-
-    def _build_path(self, key, prefix=None):
-        if prefix is None:
-            prefix = ""
-        key = "%sPathDict|%s|%s" % (prefix, self.path, key)
-        return key
-
-    def __getitem__(self, key):
-        """ Retrieve a value by key. """
-        key = self._build_path(key)
-        return super(RedisPathDict, self).__getitem__(key)
-
-    def __setitem__(self, key, val):
-        """Set a value by key."""
+    def __setitem__(self, key: Any, val: Any) -> None:
+        """Set ``key`` and record it in the key index atomically."""
         path = self._build_path(key)
-        with self._client:
-            self._keys.add(key)
-            return super(RedisPathDict, self).__setitem__(path, val)
+        with self._transaction() as client:
+            client.sadd(self._keys.set_key, self._keys.serialize(key))
+            self._set_command(client, path, val)
 
-    def __delitem__(self, key):
-        """Ensure deletion of a key from dictionary."""
+    def __delitem__(self, key: Any) -> None:
+        """Ensure ``key`` is deleted (missing keys are not an error)."""
         path = self._build_path(key)
-        with self._client:
-            self._keys.remove(key)
-            return super(RedisPathDict, self).__delitem__(path)
+        with self._transaction() as client:
+            client.srem(self._keys.set_key, self._keys.serialize(key))
+            client.delete(path)
 
-    def __contains__(self, key):
-        """Check if database contains a specific key."""
-        key = self._build_path(key)
-        return super(RedisPathDict, self).__contains__(key)
+    def __contains__(self, key: object) -> bool:
+        """Return ``True`` if ``key`` exists."""
+        return super().__contains__(self._build_path(key))
 
-    def get(self, key, default=None):
-        """Retrieve a key's value from the database falling back to a default."""
-        # Uses __getitem__ internally - no need to build path twice
-        return super(RedisPathDict, self).get(key, default=default)
+    def get(self, key: Any, default: Any = None) -> Any:
+        """Return the value of ``key`` or ``default``."""
+        # RedisDict.get calls self[key], which builds the path.
+        return super().get(key, default=default)
 
-    def expire(self, key, timeout):
-        key = self._build_path(key)
-        return super(RedisPathDict, self).expire(key, timeout)
+    def expire(self, key: Any, timeout: Any) -> Any:
+        """Set a Redis time-to-live on ``key``.
+
+        Note that the key stays in the key index after Redis expires it.
+        """
+        return super().expire(self._build_path(key), timeout)
+
+
+__all__ = ["RedisPathDict"]
