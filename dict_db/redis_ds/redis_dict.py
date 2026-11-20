@@ -1,92 +1,117 @@
+"""Dictionary interface to a whole Redis database (plain string keys).
+
+:class:`RedisDict` maps directly onto top-level Redis keys: ``len()`` is the
+size of the whole database and ``keys()`` lists every key in it. To keep a
+dictionary inside a single Redis key use
+:class:`~dict_db.redis_ds.redis_hash_dict.RedisHashDict`; for a namespaced set
+of top-level keys use :class:`~dict_db.redis_ds.redis_path_dict.RedisPathDict`.
 """
-This is module contains RedisDict, which allows users to interact with
-Redis strings using the standard Python dictionary syntax.
 
-Note that this uses an entire Redis database to back the dictionary,
-not a Redis hashmap. If you prefer an interface to a hashmap, the
-``redis_hash_dict`` file does just that.
-"""
+from __future__ import annotations
 
-import redis_config as redis_config
-import UserDict
-import redis_pipe
-from serialization import PassThroughSerializer, PickleSerializer, JSONSerializer
+import datetime
+from collections.abc import Iterator
+from typing import Any
+
+from .._compat import DictMixin
+from ..serialization import JSONSerializer, PassThroughSerializer, PickleSerializer, decode_text
+from . import redis_config
+
+_MISSING = object()
 
 
-class RedisDict(UserDict.DictMixin, PassThroughSerializer):
-    """Dictionary interface to Redis database."""
-    def __init__(self, redis_client=redis_config.CLIENT):
+class RedisDict(DictMixin, PassThroughSerializer):
+    """Dictionary interface to a Redis database."""
+
+    def __init__(self, redis_client: Any = None) -> None:
         """
-        Parameters:
-        - redis_client: configured redis_client to use for all requests.
-                        should be fine to monkey patch this to set the
-                        default settings for your environment...
+        :param redis_client: client used for all requests. Defaults to
+            :func:`dict_db.redis_ds.redis_config.get_client`.
         """
-        self._client = redis_client or redis_pipe.RedisPipe()
-        self._default_expiration = None
+        self._client = redis_client if redis_client is not None else redis_config.get_client()
+        self._default_expiration: int | datetime.timedelta | None = None
 
-    def keys(self, pattern="*"):
-        """Keys for Redis dictionary."""
-        return self._client.keys(pattern)
+    @property
+    def client(self) -> Any:
+        """The underlying Redis client."""
+        return self._client
 
-    def __len__(self):
-        """Number of key-value pairs in dictionary/database."""
-        return self._client.dbsize()
+    def keys(self, pattern: str = "*") -> list[Any]:  # type: ignore[override]
+        """Return the keys matching a Redis glob ``pattern`` (uses ``SCAN``)."""
+        return [decode_text(key) for key in self._client.scan_iter(match=pattern)]
 
-    def __getitem__(self, key):
-        """Retrieve a value by key."""
-        return self.deserialize(self._client.get(key))
+    def __iter__(self) -> Iterator[Any]:
+        return iter(self.keys())
 
-    def increment_key(self, key,  value=1):
+    def __len__(self) -> int:
+        """Number of keys in the whole Redis database (``DBSIZE``)."""
+        return int(self._client.dbsize())
+
+    def __getitem__(self, key: Any) -> Any:
+        """Return the value of ``key``; raise :class:`KeyError` if it is missing."""
+        value = self._client.get(key)
+        if value is None:
+            raise KeyError(key)
+        return self.deserialize(value)
+
+    def increment_key(self, key: Any, value: int | float = 1) -> Any:
+        """Atomically add ``value`` to a numeric key and return the new value."""
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise TypeError(f"increment values should be numbers, not {type(value)}")
         if isinstance(value, int):
             return self._client.incrby(key, value)
-        elif isinstance(value, float):
-            return self._client.incrbyfloat(key, value)
-        else:
-            raise TypeError("increment values should be numbers. not %s" % type(value))
+        return self._client.incrbyfloat(key, value)
 
-    def __setitem__(self, key, val):
-        """Set a value by key."""
-        val = self.serialize(val)
-        if isinstance(self.default_expiration, int):
-            return self._client.setex(key, val, self.default_expiration)
-        else:
-            return self._client.set(key, val)
+    def _set_command(self, client: Any, key: Any, val: Any) -> Any:
+        """Issue the ``SET`` for ``key`` on ``client`` (a client or pipeline)."""
+        expiration = self.default_expiration
+        if isinstance(expiration, (int, datetime.timedelta)) and not isinstance(expiration, bool):
+            return client.set(key, self.serialize(val), ex=expiration)
+        return client.set(key, self.serialize(val))
 
-    def __delitem__(self, key):
-        """Ensure deletion of a key from dictionary."""
+    def __setitem__(self, key: Any, val: Any) -> None:
+        """Set ``key`` (with the default expiration, if one is set)."""
+        self._set_command(self._client, key, val)
+
+    def __delitem__(self, key: Any) -> Any:
+        """Ensure ``key`` does not exist.
+
+        Unlike :class:`dict`, deleting a missing key is not an error; the
+        number of deleted keys is returned.
+        """
         return self._client.delete(key)
 
-    def __contains__(self, key):
-        "Check if database contains a specific key."
-        return self._client.exists(key)
+    def __contains__(self, key: object) -> bool:
+        """Return ``True`` if ``key`` exists."""
+        return bool(self._client.exists(key))
 
-    def get(self, key, default=None):
-        "Retrieve a key's value from the database falling back to a default."
-        return self.__getitem__(key) or default
+    def get(self, key: Any, default: Any = None) -> Any:
+        """Return the value of ``key`` or ``default`` if it does not exist."""
+        try:
+            return self[key]
+        except KeyError:
+            return default
 
-    def set_default_expiration(self, expiration):
+    def set_default_expiration(self, expiration: int | datetime.timedelta | None) -> None:
+        """Expire newly set keys after ``expiration`` seconds (``None`` disables)."""
         self._default_expiration = expiration
 
     @property
-    def default_expiration(self):
+    def default_expiration(self) -> int | datetime.timedelta | None:
+        """Expiration (seconds) applied to keys on assignment, or ``None``."""
         return self._default_expiration
 
-    def expire(self, key, timeout):
-        """
-        Set expiration on a key
-        :param key:
-        :param timeout:
-        :return:
-        """
+    def expire(self, key: Any, timeout: int | datetime.timedelta) -> Any:
+        """Set a time-to-live of ``timeout`` seconds on ``key``."""
         return self._client.expire(key, timeout)
 
 
 class PickleRedisDict(RedisDict, PickleSerializer):
-    "Serialize redis dictionary values via pickle."
-    pass
+    """Serialize values with pickle. Only use with a trusted Redis (see README)."""
 
 
 class JSONRedisDict(RedisDict, JSONSerializer):
-    "Serialize redis dictionary values via JSON."
-    pass
+    """Serialize values as JSON."""
+
+
+__all__ = ["JSONRedisDict", "PickleRedisDict", "RedisDict"]
