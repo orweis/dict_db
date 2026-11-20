@@ -1,0 +1,82 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "dict_db"
+version = "2.0.0"
+description = "Work with databases (Redis, Elasticsearch) as if they were Python dictionaries."
+readme = "README.rst"
+requires-python = ">=3.10"
+authors = [{ name = "Or Weis" }]
+keywords = ["redis", "elasticsearch", "dict", "mapping", "database"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Database",
+    "Typing :: Typed",
+]
+dependencies = []
+
+[project.optional-dependencies]
+redis = ["redis>=5.0,<9"]
+elastic = ["elasticsearch>=8.0,<10"]
+all = ["dict_db[redis,elastic]"]
+dev = [
+    "dict_db[all]",
+    "fakeredis>=2.26",
+    "pytest>=8",
+    "pytest-cov>=5",
+    "ruff>=0.8",
+    "mypy>=1.13",
+    "build>=1.2",
+]
+
+[project.urls]
+Homepage = "https://github.com/orweis/dict_db"
+Issues = "https://github.com/orweis/dict_db/issues"
+
+[tool.hatch.build.targets.sdist]
+include = ["dict_db", "tests", "README.rst", "CHANGELOG.md", "SECURITY.md", "CONTRIBUTING.md", "LICENSE"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["dict_db"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+markers = ["integration: needs a live Redis/Elasticsearch (set DICT_DB_REDIS_URL / DICT_DB_ELASTIC_URL)"]
+
+[tool.coverage.run]
+source = ["dict_db"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+fail_under = 90
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "S", "C4", "SIM", "RUF"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S301", "S311"]
+
+[tool.mypy]
+python_version = "3.10"
+packages = ["dict_db"]
+warn_unused_ignores = true
+warn_redundant_casts = true
+check_untyped_defs = true
+ignore_missing_imports = true
