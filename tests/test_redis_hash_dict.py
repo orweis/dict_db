@@ -142,6 +142,13 @@ def test_legacy_python2_pickled_metadata_is_parsed_safely(client, legacy, expect
     assert d.get_expiration("k") == expected
 
 
+@pytest.mark.parametrize("raw", [b"nan", b"inf", b"-inf", b"Fnan\n.", b"garbage"])
+def test_non_finite_or_invalid_metadata_is_ignored(client, raw):
+    d = ExpirableJSONRedisHashDict("h", redis_client=client)
+    client.hset(d.expiration_key, "k", raw)
+    assert d.get_expiration("k") is None
+
+
 def test_legacy_expired_key_is_expired(client):
     d = ExpirableJSONRedisHashDict("h", redis_client=client)
     d["k"] = "v"

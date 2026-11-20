@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import re
 import time
 from collections.abc import Iterator
@@ -138,15 +139,17 @@ def _parse_expiration(raw: Any) -> float | None:
     if raw is None:
         return None
     data = raw.encode("utf-8") if isinstance(raw, str) else bytes(raw)
+    value: float | None = None
     try:
-        return float(data)
+        value = float(data)
     except ValueError:
-        pass
-    if data == _LEGACY_PICKLED_NONE:
-        return None
-    match = _LEGACY_PICKLED_FLOAT.match(data) or _LEGACY_PICKLED_INT.match(data)
-    if match:
-        return float(match.group(1))
+        if data == _LEGACY_PICKLED_NONE:
+            return None
+        match = _LEGACY_PICKLED_FLOAT.match(data) or _LEGACY_PICKLED_INT.match(data)
+        if match:
+            value = float(match.group(1))
+    if value is not None and math.isfinite(value):
+        return value
     logger.warning("Ignoring unrecognised expiration metadata %r", data[:64])
     return None
 

@@ -21,8 +21,10 @@ python -m build           # optional: check that the package builds
 
 The tests use [fakeredis](https://github.com/cunla/fakeredis-py) and a small
 fake Elasticsearch client (`tests/conftest.py`), so no servers are needed.
-When you change how `ElasticDocDict` talks to Elasticsearch, also try it
-against a real cluster (`DICT_DB_ELASTIC_URL=http://localhost:9200`).
+When you change how `ElasticDocDict` talks to Elasticsearch, also run the
+integration tests against a disposable cluster:
+`DICT_DB_ELASTIC_URL=http://localhost:9200 pytest -m integration`
+(`DICT_DB_REDIS_URL` does the same for Redis; CI runs the Redis ones).
 
 ## Guidelines
 

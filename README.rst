@@ -193,6 +193,13 @@ scripts, so the cluster must allow inline Painless scripts (the default).
 ``with docs:`` buffers writes into ``_bulk`` requests that are sent when the
 block exits.
 
+.. note::
+
+   The Elasticsearch support has not yet been verified against a live
+   Elasticsearch 8/9 cluster; the automated tests use a fake client. Run the
+   integration tests (see `Development`_) against a disposable cluster before
+   relying on it, and please report any problem you find.
+
 Security
 --------
 
@@ -248,7 +255,16 @@ Development
     ruff check . && ruff format --check .
     mypy
 
-The tests do not need running servers. See `CONTRIBUTING.md <CONTRIBUTING.md>`_.
+The tests do not need running servers. Optional integration tests run against
+live, disposable servers (they create and delete keys and an index named
+``dict-db-it-*``) when the matching environment variable is set:
+
+.. code:: bash
+
+    DICT_DB_REDIS_URL=redis://localhost:6379/15 \
+    DICT_DB_ELASTIC_URL=http://localhost:9200 pytest -m integration
+
+See `CONTRIBUTING.md <CONTRIBUTING.md>`_.
 
 Next in module Development
 --------------------------

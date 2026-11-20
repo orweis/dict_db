@@ -79,6 +79,8 @@ current Redis/Elasticsearch clients, with security and correctness fixes. See
 - `RedisList.pop(blocking=True)` gained a `timeout` and returns `None` on timeout.
 - `MessageQueue.write()` can time out (`timeout=`) instead of spinning forever,
   and no longer busy-waits.
+- `ExpirableRedisHashDict` ignores non-finite expiration metadata (`nan`,
+  `inf`) instead of storing it as a timestamp.
 - `RedisPipe` supports nested `with` blocks, is per-thread, stores
   `transaction_results`, and resets itself if the transaction fails.
 - `from dict_db import DictDbFactory, Consts` works on Python 3; importing
@@ -95,6 +97,15 @@ current Redis/Elasticsearch clients, with security and correctness fixes. See
 - pytest suite using fakeredis and a fake Elasticsearch client, GitHub Actions
   CI (ruff, mypy, pytest on Python 3.10-3.14, build, pip-audit), Dependabot,
   `SECURITY.md` and `CONTRIBUTING.md`.
+- Opt-in integration tests (`pytest -m integration`) that run against live
+  servers when `DICT_DB_REDIS_URL` / `DICT_DB_ELASTIC_URL` are set; CI runs the
+  Redis ones against a Redis service container.
+
+### Known limitations
+
+- The Elasticsearch 8/9 code path (including its Painless scripts) has only
+  been tested against a fake client so far. Run the integration tests against
+  a disposable cluster before relying on it.
 
 ## [1.1] - 2016
 
